@@ -122,9 +122,7 @@ HttpServletRequest
 
  	what is Filter? 
 
-	A filter is a reusable piece of code that can transform the content of HTTP requests,
-responses, and header information.
-
+	A filter is a reusable piece of code that can transform the content of HTTP requests,responses, and header information.
 > ```
 > org.springframework.web.servlet.HandlerInterceptor
 > ```
@@ -1015,7 +1013,7 @@ public final synchronized void start() throws LifecycleException {
 >
 > 协议升级：在servlet 3.1之后新增 WebSocket协议，如果Processor处理之后Socket的状态是UPGRADING,则EndPoint中的handler回接着创建并调用upgrade包中的processor进行处理
 >
-> request：Adapter转换后的request，其实就是封装了一层，  `public class Request implements org.apache.catalina.servlet4preview.http.HttpServletRequest`
+> request转换：Adapter转换后的request，其实就是封装了一层，  `public class Request implements org.apache.catalina.servlet4preview.http.HttpServletRequest`
 
 ###### 3.3.2 Pipeline-Value管道
 
@@ -1029,7 +1027,241 @@ public final synchronized void start() throws LifecycleException {
 
 ​	经过所有管道（EnginePipeline、HostPipeline、ContextPipeline、WrapperPieline）后，在最后的WrapperPieline的BaseValue中会创建`FilterChain`并调用其doFilter来处理请求，FilterChain包含着我们配置的与请求相匹配的`Filter`和`Servlet`。
 
-#### 4. servlet标准实现 springmvc dispatcherServlet
+#### 4. springMVC 核心servlet —DispatcherServlet
 
-#### 
+##### 4.1 整体结构
+
+![image-20181218175126206](https://ws4.sinaimg.cn/large/006tNbRwgy1fyb1opc690j30ys0is43x.jpg)
+
+> Aware：如果某个类想使用Spring的一些东西，就可以实现Aware接口
+>
+> Capable:具有spring某个类的能力
+
+##### 4.2 创建过程
+
+###### 4.2.1 HttpServletBean的创建
+
+​	    实现了`EnvironmentCapable`、`EnvironmentAware` ，主要作用是将Servlet中配置的参数设置到相应的
+
+###### 4.2.2 FramewordkServlet的创建
+
+​	    实现了`ApplicationContextAware`，其主要作用是调用`initWebApplicationContext()`初始化`WebApplicationContext`
+
+- 获取spring的根工期rootContext
+- 设置webApplicationContext并根据情况调用onRefresh方法
+- 将WebApplicationContext设置到ServletContext中			
+
+###### 4.2.3 DispatcherServlet的创建
+
+​	onRefresh方法是DispatcherServlet的入口方法，onRefresh中调用了initStrategies()方法来初始化一些策略组件
+
+```java
+
+protected void onRefresh(ApplicationContext context) {
+    this.initStrategies(context);
+}
+
+protected void initStrategies(ApplicationContext context) {
+    this.initMultipartResolver(context);
+    this.initLocaleResolver(context);
+    this.initThemeResolver(context);
+    this.initHandlerMappings(context);
+    this.initHandlerAdapters(context);
+    this.initHandlerExceptionResolvers(context);
+    this.initRequestToViewNameTranslator(context);
+    this.initViewResolvers(context);
+}
+```
+##### 4.3 处理请求
+
+###### 4.3.1 FrameworkServlet
+
+​	Servlet的处理过程，首先是从Servlet接口的service，然后在HttpServlet的service方法中根据请求的类型不同将请求路由到了doGet、doHead等方法。
+
+​	FrameworkServlet中重写了doGet等方法。将请求集中到processRequest方法进行统一处理
+
+```java
+/**
+ * Delegate GET requests to processRequest/doService.
+ * <p>Will also be invoked by HttpServlet's default implementation of <code>doHead</code>,
+ * with a <code>NoBodyResponse</code> that just captures the content length.
+ * @see #doService
+ * @see #doHead
+ */
+@Override
+protected final void doGet(HttpServletRequest request, HttpServletResponse response)
+      throws ServletException, IOException {
+
+   processRequest(request, response);
+}
+```
+
+​	processRequest这个方法主要做了两件事情
+
+- 对LocaleContext（获取locale）和RequestAttributes(管理request和session属性)的设置及恢复
+- 处理完后发布ServletRequestHandledEvent消息
+
+> 当然还有doService，和对异步请求对处理
+
+
+
+LocaleContextHolder 、RequestContextHolder 
+
+```java
+public abstract class LocaleContextHolder {
+    private static final ThreadLocal localeContextHolder = new NamedThreadLocal("Locale context");
+    private static final ThreadLocal inheritableLocaleContextHolder = new NamedInheritableThreadLocal("Locale context");
+    ....
+}
+```
+
+ 这里比较有意思的地方是这是个抽象类，里面的方法实现都是静态方法，只能调用不能实例化。RequestContextHolder的实现类似，封装的是ServletRequestAttributes
+
+> 这里之所以需要对LocaleContext和RequestAttributes恢复，是因为在Servlet外面可能还有别等操作，例如Filter（Spring-MVC的HandlerInterceptor）,为了不影响那些操作。
+
+###### 4.3.2 DispatcherServlet
+
+​	DispatcherServlet是FrameworkServlet的子类，实现了doService方法
+
+```java
+/**
+ * Exposes the DispatcherServlet-specific request attributes and delegates to {@link #doDispatch}
+ * for the actual dispatching.
+ */
+@Override
+protected void doService(HttpServletRequest request, HttpServletResponse response) 
+    throws Exception {
+    
+   // Keep a snapshot of the request attributes in case of an include,
+   // to be able to restore the original attributes after the include.
+   Map<String, Object> attributesSnapshot = null;
+   if (WebUtils.isIncludeRequest(request)) {
+      attributesSnapshot = new HashMap<String, Object>();
+      Enumeration attrNames = request.getAttributeNames();
+      while (attrNames.hasMoreElements()) {
+         String attrName = (String) attrNames.nextElement();
+         if (this.cleanupAfterInclude 					         ||attrName.startsWith("org.springframework.web.servlet")) {
+            attributesSnapshot.put(attrName, request.getAttribute(attrName));
+         }
+      }
+   }
+
+   // Make framework objects available to handlers and view objects.
+   request.setAttribute(WEB_APPLICATION_CONTEXT_ATTRIBUTE, getWebApplicationContext());
+   request.setAttribute(LOCALE_RESOLVER_ATTRIBUTE, this.localeResolver);
+   request.setAttribute(THEME_RESOLVER_ATTRIBUTE, this.themeResolver);
+   request.setAttribute(THEME_SOURCE_ATTRIBUTE, getThemeSource());
+
+   try {
+      doDispatch(request, response);
+   }
+   finally {
+      // Restore the original attribute snapshot, in case of an include.
+      if (attributesSnapshot != null) {
+         restoreAttributesAfterInclude(request, attributesSnapshot);
+      }
+   }
+}
+```
+
+[^]: 移除了部分日志代码
+
+在doDispatch之前做了两件事情
+
+- 判断是否include请求，是的话保存快照（attributesSnapshot）
+- 为request设置默认的属性，在后面的handlers和view中需要使用
+
+下面是doDispatch的方法的实现，主要的功能是 Process the actual dispatching to the handler.
+
+```java
+/**
+ * Process the actual dispatching to the handler.
+ * <p>The handler will be obtained by applying the servlet's HandlerMappings in order.
+ * The HandlerAdapter will be obtained by querying the servlet's installed HandlerAdapters
+ * to find the first that supports the handler class.
+ * <p>All HTTP methods are handled by this method. It's up to HandlerAdapters or handlers
+ * themselves to decide which methods are acceptable.
+ * @param request current HTTP request
+ * @param response current HTTP response
+ * @throws Exception in case of any kind of processing failure
+ */
+protected void doDispatch(HttpServletRequest request, HttpServletResponse response) throws Exception {
+   HttpServletRequest processedRequest = request;
+   HandlerExecutionChain mappedHandler = null;
+   int interceptorIndex = -1;
+
+   try {
+      ModelAndView mv;
+      boolean errorView = false;
+
+      try {
+         processedRequest = checkMultipart(request);
+
+         // Determine handler for the current request.
+         mappedHandler = getHandler(processedRequest, false);
+          
+         // Apply preHandle methods of registered interceptors.
+         HandlerInterceptor[] interceptors = mappedHandler.getInterceptors();
+ 		//....
+
+         // Actually invoke the handler.
+         HandlerAdapter ha = getHandlerAdapter(mappedHandler.getHandler());
+         mv = ha.handle(processedRequest, response, mappedHandler.getHandler());
+
+         // Do we need view name translation?
+         if (mv != null && !mv.hasView()) {
+            mv.setViewName(getDefaultViewName(request));
+         }
+
+         // Apply postHandle methods of registered interceptors.
+		 //...
+      }catch (ModelAndViewDefiningException ex) {
+         logger.debug("ModelAndViewDefiningException encountered", ex);
+         mv = ex.getModelAndView();
+      }catch (Exception ex) {
+         Object handler = (mappedHandler != null ? mappedHandler.getHandler() : null);
+         mv = processHandlerException(processedRequest, response, handler, ex);
+         errorView = (mv != null);
+      }
+
+      // Did the handler return a view to render?
+      if (mv != null && !mv.wasCleared()) {
+         render(mv, processedRequest, response);
+         if (errorView) {
+            WebUtils.clearErrorRequestAttributes(request);
+         }
+      }
+      else {
+         if (logger.isDebugEnabled()) {
+            logger.debug("Null ModelAndView returned to DispatcherServlet with name '" + getServletName() +
+                  "': assuming HandlerAdapter completed request handling");
+         }
+      }
+
+      // Trigger after-completion for successful outcome.
+      triggerAfterCompletion(mappedHandler, interceptorIndex, processedRequest, response, null);
+   }catch (Exception ex) {
+      // Trigger after-completion for thrown exception.
+      triggerAfterCompletion(mappedHandler, interceptorIndex, processedRequest, response, ex);
+      throw ex;
+   }catch (Error err) {
+      ServletException ex = new NestedServletException("Handler processing failed", err);
+      // Trigger after-completion for thrown exception.
+      triggerAfterCompletion(mappedHandler, interceptorIndex, processedRequest, response, ex);
+      throw ex;
+   }finally {
+      // Clean up any resources used by a multipart request.
+      if (processedRequest != request) {
+         cleanupMultipart(processedRequest);
+      }
+   }
+}
+```
+
+整个处理过程最核心的代码只有4句
+
+- 根据request请求在HandlerMapping找到对应的Handler 
+- 根据Handler找到对应的HandlerAdapter
+- 用HandlerAdapter处理Handler,返回一个ModelAndView
+- 根据ModelAndView的信息（或异常处理），通过ViewResolver找到View,并根据Model中的数据渲染输出后给用户
 
