@@ -2,9 +2,9 @@
 
 ------
 
-#### servlet规范
+### servlet规范
 
-##### 1 servlet 3.1规范
+#### 1.servlet 3.1规范
 
 ######  1.1 What is servlet
 
@@ -177,7 +177,7 @@ public class ContextLoaderListener implements ServletContextListener {
 
 
 
-##### 2  Servlet 
+#### 2. Servlet 
 
 	Server + Applet 的缩写，表示一个服务器应用
 
@@ -351,13 +351,12 @@ public abstract class GenericServlet
 
 答：在 Servlet 2.4 规范的 7.7.2 Distributed Environments 章节中，有一句这样的描述：
 
-```
+```markdown
 The distributed servlet container must support the mechanism necessary for
-
 migrating objects that implement Serializable.
 ```
 
-	按照规范的设计，Servlet 有一个钝化的特性，类似于 Servlet 持久化到文件，然后当容器 Crash 回复后，可以重新恢复保存前的状态。
+> 按照规范的设计，Servlet 有一个钝化的特性，类似于 Servlet 持久化到文件，然后当容器 Crash 回复后，可以重新恢复保存前的状态。
 
 
 
@@ -394,21 +393,6 @@ import ....;
  *
  * <p>Likewise, there's almost no reason to override the 
  * <code>doOptions</code> and <code>doTrace</code> methods.
- * 
- * <p>Servlets typically run on multithreaded servers,
- * so be aware that a servlet must handle concurrent
- * requests and be careful to synchronize access to shared resources.
- * Shared resources include in-memory data such as
- * instance or class variables and external objects
- * such as files, database connections, and network 
- * connections.
- * See the
- * <a href="http://java.sun.com/Series/Tutorial/java/threads/multithreaded.html">
- * Java Tutorial on Multithreaded Programming</a> for more
- * information on handling multiple threads in a Java program.
- *
- * @author	Various
- * @version	$Version$
  *
  */
 public abstract class HttpServlet extends GenericServlet
@@ -538,7 +522,6 @@ public abstract class HttpServlet extends GenericServlet
             Object[] errArgs = new Object[1];
             errArgs[0] = method;
             errMsg = MessageFormat.format(errMsg, errArgs);
-
             resp.sendError(HttpServletResponse.SC_NOT_IMPLEMENTED, errMsg);
         }
     }
@@ -577,7 +560,6 @@ class NoBodyResponse extends HttpServletResponseWrapper {
     }
 	// ....
 }
-
 /*
  * Servlet output stream that gobbles up all its data.
  */
@@ -597,11 +579,11 @@ class NoBodyOutputStream extends ServletOutputStream {
 	
 	doOptions和doTrace 主要是用来做一些调试工作 
 
-##### 3 servlet容器 tomcat
+#### 3.servlet容器 tomcat
 
+![wiki_tomcat](https://ws1.sinaimg.cn/large/006tNbRwly1fy9tr0l2swj31kt0u0qed.jpg)
 
-
-###### 3.1 Tomcat的顶层结构
+##### 3.1 Tomcat的顶层结构
 
 ```
 Catalina 管理整个Tomcat的管理类
@@ -617,7 +599,7 @@ Server 最顶层容器，代表整个服务器
 
 
 
-###### 3.2 Bootstrap
+##### 3.2 Tomcat的启动过程
 
 	`org.apache.catalina.startup.Bootstrap` 是Tomcat的入口，作用类似一个`CatalinaAdptor`，具体处理还是Catalina来完成，这样做的好处是可以把启动的入口和具体的管理类分开，从而可以很方便地创建出多种启动方式。 
 
@@ -680,8 +662,7 @@ public final class Bootstrap {
             try {
                 @SuppressWarnings("unused")
                 URL url = new URL(repository);
-                repositories.add(
-                        new Repository(repository, RepositoryType.URL));
+                repositories.add(new Repository(repository, RepositoryType.URL));
                 continue;
             } catch (MalformedURLException e) {
                 // Ignore
@@ -710,7 +691,6 @@ public final class Bootstrap {
      * @throws Exception Fatal initialization error
      */
     public void init() throws Exception {
-
         initClassLoaders();
 
         Thread.currentThread().setContextClassLoader(catalinaLoader);
@@ -738,7 +718,6 @@ public final class Bootstrap {
         method.invoke(startupInstance, paramValues);
 
         catalinaDaemon = startupInstance;
-
     }
     
     /**
@@ -826,7 +805,6 @@ public final class Bootstrap {
         //实现略 ,主要通过反射调用了catalina的getAwait
     }
 
-
     /**
      * Destroy the Catalina Daemon.
      */
@@ -908,15 +886,15 @@ public final class Bootstrap {
  - 初始化容器，调用`load()` 实际是调用catalina里的`init()`
  - 启动容器，通过引用`catalinaDaemon` 反射射调用`start()`方法（实际还是通过catalina操作容器）
 
-         关于类加载，我们都知道 JSEE 默认的类加载机制是双亲委派原则（详细查看如下🔎https://www.cnblogs.com/miduos/p/9250565.html）
+         关于类加载，我们都知道 J2EE 默认的类加载机制是双亲委派原则（详细查看如下🔎https://www.cnblogs.com/miduos/p/9250565.html）
 
-	通过debug可以发现  commonLoader、catalinaLoader 、sharedLoader 其实三个是同一个，原因是因为`catalina.properties` 的配置中默认是空的。
+	通过debug可以发现  commonLoader、catalinaLoader 、sharedLoader 其实三个是同一个（底层都是URLClassLoader），原因是因为`catalina.properties` 的配置中默认是空的。
 
 	另外在`init()` 中 `Thread.currentThread().setContextClassLoader(catalinaLoader);` 
 
 
 
-###### 3.3 Catalina的启动过程
+###### 3.2.1Catalina的启动过程
 
 	Catalina的启动主要是调用`setAwait()`、`load()`和`start()`方法来完成。
 
@@ -926,7 +904,7 @@ public final class Bootstrap {
 
 
 
-###### 3.4 Server的启动过程	
+###### 3.2.2 Server的启动过程	
 
 	Server的默认实现`org.apache.catalina.core.StandardServer` ,在其父类中`org.apache.catalina.util.LifecycleBase` 中的`init() ` 实现如下
 
@@ -959,8 +937,7 @@ public final synchronized void init() throws LifecycleException {
 @Override
 public final synchronized void start() throws LifecycleException {
 
-    if (LifecycleState.STARTING_PREP.equals(state) || LifecycleState.STARTING.equals(state) ||
-            LifecycleState.STARTED.equals(state)) {
+    if (LifecycleState.STARTING_PREP.equals(state) || LifecycleState.STARTING.equals(state) ||LifecycleState.STARTED.equals(state)) {
 
         if (log.isDebugEnabled()) {
             Exception e = new LifecycleException();
@@ -968,7 +945,6 @@ public final synchronized void start() throws LifecycleException {
         } else if (log.isInfoEnabled()) {
             log.info(sm.getString("lifecycleBase.alreadyStarted", toString()));
         }
-
         return;
     }
 
@@ -1007,17 +983,53 @@ public final synchronized void start() throws LifecycleException {
 
 	其中 `startInternal() 和 initInternal()` 为模版方法 ，查看其实现类 可以发现是循环调用了每个`service`的`start()`和`init()`
 
-###### 3.5 Service的启动过程
+###### 3.2.3 Service的启动过程
 
-		类似于Server , `StandardService`的`initInternal()`和 `startInternal()`的方法主要调用`container`、`executors`、`mapperListener`、`connectors`的`init()`和`start()`方法。
+	类似于Server , `StandardService`的`initInternal()`和 `startInternal()`的方法主要调用`container`、`executors`、`mapperListener`、`connectors`的`init()`和`start()`方法。
 
+> mapperListener是Mapper的监听器，可以监听container容器多变化
+>
+> executors是用在connectors中管理线程的线程池，在server.xml配置文件中tomcatThreadPool
 
+下图为整个启动流程
 
+![image-20181218123224591](https://ws4.sinaimg.cn/large/006tNbRwgy1fyasgs52ycj30wk0k6jxv.jpg)
 
+##### 3.3 关于一次请求
 
+​		Connector用于接收请求并将请求封装成`Request`和`Response`来处理，最底层是使用Socket来进行连接的，封装完后交给Container进行处理（通过pipeline-Value管道来处理），Container处理完之后返回给Connector，最后Connector使用Socket将处理结果返回给客户端，整个请求就处理完了。
 
+###### 3.3.1 Connector的结构
 
-##### 4  servlet标准实现 springmvc dispatcherServlet
+​	`Connector`中具体是用`ProtocolHandler`来处理请求的，有多种不同的连接类型（Ajp、HTTP和Spdy）。
+
+其中有3个非常重要的组件。（`Connector`的创建过程主要是初始化`ProtocolHandler`,serverx.xml中可配置）
+
+- Endpoint  用于处理底层的Socket的网络连接，用来实现TCP/IP协议
+- Processor  用于将Endpoint接收到的Socket封装成Request，用来实现HTTP协议(BIO、NIO、APR)
+- Adapter 用于将封装好的Request交给Container进行具体处理，将适配到Servlet容器（转换`org.apache.coyote.Request`为`org.apache.catalina.connector.Request` ）
+
+> Ajp ：连接器监听8009端口，负责和其他的HTTP服务器建立连接。在把Tomcat与其他HTTP服务器集成时，就需要用到这个连接器。
+>
+> Apr : 是从操作系统级别解决异步IO问题，大幅度提高服务器的并发处理性能 http://tomcat.apache.org/tomcat-8.5-doc/apr.html
+>
+> 协议升级：在servlet 3.1之后新增 WebSocket协议，如果Processor处理之后Socket的状态是UPGRADING,则EndPoint中的handler回接着创建并调用upgrade包中的processor进行处理
+>
+> request：Adapter转换后的request，其实就是封装了一层，  `public class Request implements org.apache.catalina.servlet4preview.http.HttpServletRequest`
+
+###### 3.3.2 Pipeline-Value管道
+
+​	Piepeline的管道模型和普通的责任链模式稍微有点不同，区别主要如下
+
+- 每个pipeline都有特定的value，而且是在管道的最后一个执行，这个Value叫做BaseValue
+
+- 上层的BaseValue（类似配货车到中转站的感觉）会调用下层容器的管道
+
+> 每个BaseValue都有一个StandarValue的实现，例如WrapperValue的标准实现是StanderWrpperValue
+
+​	经过所有管道（EnginePipeline、HostPipeline、ContextPipeline、WrapperPieline）后，在最后的WrapperPieline的BaseValue中会创建`FilterChain`并调用其doFilter来处理请求，FilterChain包含着我们配置的与请求相匹配的`Filter`和`Servlet`。
+
+#### 4. servlet标准实现 springmvc dispatcherServlet
 
 #### 
 
