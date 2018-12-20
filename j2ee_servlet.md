@@ -4,7 +4,7 @@
 
 ### j2ee_servlet
 
-#### 1.servlet 3.1规范
+#### 1.servlet 3.1规范概览
 
 ######  1.1 What is servlet
 
@@ -1146,7 +1146,7 @@ public interface HandlerMapping {
 
 ![image-20181219181838287](https://ws4.sinaimg.cn/large/006tNbRwly1fyc839v8vdj31l20u043g.jpg)
 
-> 这里提供了Ordered接口，可以确定匹配的顺序，同时通过继承WebApplicationObjectSupport抽象类，可以获取相关Bean（handler）
+> 这里提供了Ordered接口，可以确定匹配的顺序，同时通过继承WebApplicationObjectSupport抽象类，可以获取相关Bean（handler）,更多细节可查看 类AbstractHandlerMapping。
 
 ###### 4.3.2 HandlerAdapter
 
@@ -1274,7 +1274,21 @@ public class SimpleControllerHandlerAdapter implements HandlerAdapter {
 
 ![image-20181219180136155](https://ws1.sinaimg.cn/large/006tNbRwly1fyc7lnlrzmj318o0u042e.jpg)
 
-> HandlerAdaptger implementators may implement the Order，使用时候是遍历 handlerAdapters ，调用supports判断直接返回（除了设置的，默认的实现有3个）。注意Order是越低优先级越高的。
+> HandlerAdapter implementators may implement the Order，使用时候是遍历 handlerAdapters ，调用supports判断直接返回（除了设置的，默认的实现有3个）。注意Order是越低优先级越高的。更多细节可以查看#afterPropertiesSet()方法
+
+总结一下，主要做了三件事，解析参数、执行请求，处理返回结果
+
+- 解析参数的过程中用到的参数来源有多个，大体可分为两类，一类是从Model来的（通过FlashMapManager和ModelFactory），另一类是从Request来的, 具体使用HandlerMethodArgumentResolver进行解析（有的是@InitBinder WebDataBinder）
+- 执行请求的是用HandlerMethod的子类ServletInvocableHandlerMethod
+- 返回值用HandlerMethodReturnValueHandler进行解析。
+
+另外，整个处理过程中ModelAndViewContainer起着参数传递的作用。
+
+​	这里还有一个需要注意的，就是`RequestMappingHandlerAdapter` 是怎么注入的，通过debug发现，默认的实现HandlerAdapter 有 3个 ,除了前者还有`HttpRequestHandlerAdapte`、`SimpleControllerHandlerAdapte`的，[通过查询官方文档发现](https://docs.spring.io/spring/docs/3.2.10.RELEASE/spring-framework-reference/html/mvc.html#mvc-config-enable)，只要在配置文件配置了`mvc:annotation-driven` ，会自动生成相关@RequestMapping的类。
+
+![image-20181220174621313](https://ws1.sinaimg.cn/large/006tNbRwly1fydcs34e4rj31y60qu11o.jpg)
+
+> 官方文档的截图
 
 ###### 4.3.3 HandlerExceptionResolver
 
@@ -1372,7 +1386,7 @@ public interface ViewResolver {
 
 ![image-20181219195241323](https://ws1.sinaimg.cn/large/006tNbRwly1fycat4mrudj310q0u043a.jpg)
 
-按照类图可以把继承`AbstractCachingViewResolver`分成两类
+按照类图可以把继承`AbstractCachingViewResolver`(里面两个Map的方式值得学习)分成两类
 
 - `ResourceBundleViewResolver`  可以同时支持多种类型的视图，需要将每一个视图名和对应的视图类型配置到相应的properties文件中,该类的注释中，解释了其用法,
 
@@ -1628,6 +1642,8 @@ public interface MultipartResolver {
 
 
 > 对于上传类型判断是 multipart/form-data
+>
+> 两种实现，一种是Servlet的标准实现StandardServletMultipartResolver 一种是Apache的commons-fileupload方式
 
 ###### 4.3.9 FlashMapManager
 
@@ -1907,6 +1923,1293 @@ protected void doDispatch(HttpServletRequest request, HttpServletResponse respon
 - 用HandlerAdapter处理Handler,返回一个ModelAndView(Controller就是在这个地方执行)
 - 根据ModelAndView的信息（或异常处理），通过ViewResolver找到View,并根据Model中的数据渲染输出后给用户
 
-整个处理流程如下
+整个`#doDispatcher()`处理流程如下
 
 ![image-20181219111943655](https://ws4.sinaimg.cn/large/006tNbRwgy1fybvzj6p72j30u00ynju2.jpg)
+
+> ​	从请求开始的话，当请求到达服务器，服务器(Tomcat connector)分配一个socket线程来连接，创建request和response ，然后交给对应的servlet处理（中间经过Pipeline,Filter），这样请求就从容器(Tomcat)到Servlet（springMVC）
+
+​	
+
+#### 5. 异步请求
+
+​	http协议是单向的，只能客户端自己拉，不能服务端主动推。异步请求一般有两种方式，定时轮询或长链接。Servlet对异步的支持是通过长链接的方式。
+
+##### 5.1 servlet异步支持
+
+###### 5.1.1ServletRequest
+
+​	首先是在 3.0后的 ServletRequest 中可以找到`#startAsync()` 返回一个异步容器
+
+```java
+package javax.servlet;
+
+import java.io.*;
+import java.util.*;
+
+/**
+ * Defines an object to provide client request information to a servlet.  The
+ * servlet container creates a <code>ServletRequest</code> object and passes
+ * it as an argument to the servlet's <code>service</code> method.
+ *
+ * <p>A <code>ServletRequest</code> object provides data including
+ * parameter name and values, attributes, and an input stream.
+ * Interfaces that extend <code>ServletRequest</code> can provide
+ * additional protocol-specific data (for example, HTTP data is
+ * provided by {@link javax.servlet.http.HttpServletRequest}.
+ * 
+ * @author 	Various
+ *
+ * @see 	javax.servlet.http.HttpServletRequest
+ *
+ */
+public interface ServletRequest {
+    /**
+     * Puts this request into asynchronous mode, and initializes its
+     * {@link AsyncContext} with the original (unwrapped) ServletRequest
+     * and ServletResponse objects.
+     *
+     * <p>Calling this method will cause committal of the associated
+     * response to be delayed until {@link AsyncContext#complete} is
+     * called on the returned {@link AsyncContext}, or the asynchronous
+     * operation has timed out.
+     *
+     * <p>Calling {@link AsyncContext#hasOriginalRequestAndResponse()} on
+     * the returned AsyncContext will return <code>true</code>. Any filters
+     * invoked in the <i>outbound</i> direction after this request was put
+     * into asynchronous mode may use this as an indication that any request
+     * and/or response wrappers that they added during their <i>inbound</i>
+     * invocation need not stay around for the duration of the asynchronous
+     * operation, and therefore any of their associated resources may be
+     * released.
+     *
+     * <p>This method clears the list of {@link AsyncListener} instances
+     * (if any) that were registered with the AsyncContext returned by the
+     * previous call to one of the startAsync methods, after calling each
+     * AsyncListener at its {@link AsyncListener#onStartAsync onStartAsync}
+     * method.
+     *
+     * <p>Subsequent invocations of this method, or its overloaded 
+     * variant, will return the same AsyncContext instance, reinitialized
+     * as appropriate.
+     *
+     * @return the (re)initialized AsyncContext
+     * 
+     * @throws IllegalStateException if this request is within the scope of
+     * a filter or servlet that does not support asynchronous operations
+     * (that is, {@link #isAsyncSupported} returns false),
+     * or if this method is called again without any asynchronous dispatch
+     * (resulting from one of the {@link AsyncContext#dispatch} methods),
+     * is called outside the scope of any such dispatch, or is called again
+     * within the scope of the same dispatch, or if the response has
+     * already been closed
+     *
+     * @since Servlet 3.0
+     */
+    public AsyncContext startAsync() throws IllegalStateException;
+    //...
+}
+```
+
+[^]: 省略了其他不相关代码
+
+###### 5.1.2  异步容器AsyncContext
+
+```java
+package javax.servlet;
+
+/**
+ * Class representing the execution context for an asynchronous operation
+ * that was initiated on a ServletRequest.
+ *
+ * <p>An AsyncContext is created and initialized by a call to
+ * {@link ServletRequest#startAsync()} or
+ * {@link ServletRequest#startAsync(ServletRequest, ServletResponse)}.
+ * Repeated invocations of these methods will return the same AsyncContext
+ * instance, reinitialized as appropriate.
+ *
+ * <p>In the event that an asynchronous operation has timed out, the
+ * container must run through these steps:
+ * <ol>
+ * <li>Invoke, at their {@link AsyncListener#onTimeout onTimeout} method, all
+ * {@link AsyncListener} instances registered with the ServletRequest
+ * on which the asynchronous operation was initiated.</li>
+ * <li>If none of the listeners called {@link #complete} or any of the
+ * {@link #dispatch} methods, perform an error dispatch with a status code
+ * equal to <tt>HttpServletResponse.SC_INTERNAL_SERVER_ERROR</tt>.</li>
+ * <li>If no matching error page was found, or the error page did not call
+ * {@link #complete} or any of the {@link #dispatch} methods, call
+ * {@link #complete}.</li>
+ * </ol>
+ *
+ * @since Servlet 3.0
+ */
+public interface AsyncContext {
+
+    /**
+     * The name of the request attribute under which the original
+     * request URI is made available to the target of a
+     * {@link #dispatch(String)} or {@link #dispatch(ServletContext,String)} 
+     */
+    static final String ASYNC_REQUEST_URI = "javax.servlet.async.request_uri";
+
+    /**
+     * The name of the request attribute under which the original
+     * context path is made available to the target of a
+     * {@link #dispatch(String)} or {@link #dispatch(ServletContext,String)} 
+     */
+    static final String ASYNC_CONTEXT_PATH = "javax.servlet.async.context_path";
+
+    /**
+     * The name of the request attribute under which the original
+     * path info is made available to the target of a
+     * {@link #dispatch(String)} or {@link #dispatch(ServletContext,String)} 
+     */
+    static final String ASYNC_PATH_INFO = "javax.servlet.async.path_info";
+
+    /**
+     * The name of the request attribute under which the original
+     * servlet path is made available to the target of a
+     * {@link #dispatch(String)} or {@link #dispatch(ServletContext,String)}  
+     */
+    static final String ASYNC_SERVLET_PATH = "javax.servlet.async.servlet_path";
+
+    /**
+     * The name of the request attribute under which the original
+     * query string is made available to the target of a
+     * {@link #dispatch(String)} or {@link #dispatch(ServletContext,String)} 
+     */
+    static final String ASYNC_QUERY_STRING = "javax.servlet.async.query_string";
+
+
+    /**
+     * Gets the request that was used to initialize this AsyncContext
+     * by calling {@link ServletRequest#startAsync()} or
+     * {@link ServletRequest#startAsync(ServletRequest, ServletResponse)}.
+     *
+     * @return the request that was used to initialize this AsyncContext
+     */
+    public ServletRequest getRequest();
+
+
+    /**
+     * Gets the response that was used to initialize this AsyncContext
+     * by calling {@link ServletRequest#startAsync()} or
+     * {@link ServletRequest#startAsync(ServletRequest, ServletResponse)}.
+     *
+     * @return the response that was used to initialize this AsyncContext
+     */
+    public ServletResponse getResponse();
+
+
+    /**
+     * Checks if this AsyncContext was initialized with the original or
+     * application-wrapped request and response objects.
+     * 
+     * <p>This information may be used by filters invoked in the
+     * <i>outbound</i> direction, after a request was put into
+     * asynchronous mode, to determine whether any request and/or response
+     * wrappers that they added during their <i>inbound</i> invocation need
+     * to be preserved for the duration of the asynchronous operation, or may
+     * be released.
+     *
+     * @return true if this AsyncContext was initialized with the original
+     * request and response objects by calling
+     * {@link ServletRequest#startAsync()}, or if it was initialized by
+     * calling
+     * {@link ServletRequest#startAsync(ServletRequest, ServletResponse)},
+     * and neither the ServletRequest nor ServletResponse arguments 
+     * carried any application-provided wrappers; false otherwise
+     */
+    public boolean hasOriginalRequestAndResponse();
+
+
+    /**
+     * Dispatches the request and response objects of this AsyncContext
+     * to the servlet container.
+     * 
+     * <p>If the asynchronous cycle was started with
+     * {@link ServletRequest#startAsync(ServletRequest, ServletResponse)},
+     * and the request passed is an instance of HttpServletRequest,
+     * then the dispatch is to the URI returned by
+     * {@link javax.servlet.http.HttpServletRequest#getRequestURI}.
+     * Otherwise, the dispatch is to the URI of the request when it was
+     * last dispatched by the container.
+     *
+     * <p>The following sequence illustrates how this will work:
+     * <code><pre>
+     * // REQUEST dispatch to /url/A
+     * AsyncContext ac = request.startAsync();
+     * ...
+     * ac.dispatch(); // ASYNC dispatch to /url/A
+     * 
+     * // FORWARD dispatch to /url/B
+     * getRequestDispatcher("/url/B").forward(request,response);
+     * // Start async operation from within the target of the FORWARD
+     * // dispatch
+     * ac = request.startAsync();
+     * ...
+     * ac.dispatch(); // ASYNC dispatch to /url/A
+     * 
+     * // FORWARD dispatch to /url/B
+     * getRequestDispatcher("/url/B").forward(request,response);
+     * // Start async operation from within the target of the FORWARD
+     * // dispatch
+     * ac = request.startAsync(request,response);
+     * ...
+     * ac.dispatch(); // ASYNC dispatch to /url/B
+     * </pre></code>
+     *
+     * <p>This method returns immediately after passing the request
+     * and response objects to a container managed thread, on which the
+     * dispatch operation will be performed.
+     * If this method is called before the container-initiated dispatch
+     * that called <tt>startAsync</tt> has returned to the container, the
+     * dispatch operation will be delayed until after the container-initiated
+     * dispatch has returned to the container.
+     *
+     * <p>The dispatcher type of the request is set to
+     * <tt>DispatcherType.ASYNC</tt>. Unlike
+     * {@link RequestDispatcher#forward(ServletRequest, ServletResponse)
+     * forward dispatches}, the response buffer and
+     * headers will not be reset, and it is legal to dispatch even if the
+     * response has already been committed.
+     *
+     * <p>Control over the request and response is delegated
+     * to the dispatch target, and the response will be closed when the
+     * dispatch target has completed execution, unless
+     * {@link ServletRequest#startAsync()} or
+     * {@link ServletRequest#startAsync(ServletRequest, ServletResponse)}
+     * are called.
+     * 
+     * <p>Any errors or exceptions that may occur during the execution
+     * of this method must be caught and handled by the container, as
+     * follows:
+     * <ol>
+     * <li>Invoke, at their {@link AsyncListener#onError onError} method, all
+     * {@link AsyncListener} instances registered with the ServletRequest
+     * for which this AsyncContext was created, and make the caught 
+     * <tt>Throwable</tt> available via {@link AsyncEvent#getThrowable}.</li>
+     * <li>If none of the listeners called {@link #complete} or any of the
+     * {@link #dispatch} methods, perform an error dispatch with a status code
+     * equal to <tt>HttpServletResponse.SC_INTERNAL_SERVER_ERROR</tt>, and
+     * make the above <tt>Throwable</tt> available as the value of the
+     * <tt>RequestDispatcher.ERROR_EXCEPTION</tt> request attribute.</li>
+     * <li>If no matching error page was found, or the error page did not call
+     * {@link #complete} or any of the {@link #dispatch} methods, call
+     * {@link #complete}.</li>
+     * </ol>
+     *
+     * <p>There can be at most one asynchronous dispatch operation per
+     * asynchronous cycle, which is started by a call to one of the
+     * {@link ServletRequest#startAsync} methods. Any attempt to perform an
+     * additional asynchronous dispatch operation within the same
+     * asynchronous cycle will result in an IllegalStateException.
+     * If startAsync is subsequently called on the dispatched request,
+     * then any of the dispatch or {@link #complete} methods may be called.
+     *
+     * @throws IllegalStateException if one of the dispatch methods
+     * has been called and the startAsync method has not been
+     * called during the resulting dispatch, or if {@link #complete}
+     * was called
+     *
+     * @see ServletRequest#getDispatcherType
+     */
+    public void dispatch();
+
+
+    /**
+     * Dispatches the request and response objects of this AsyncContext
+     * to the given <tt>path</tt>.
+     *
+     * <p>The <tt>path</tt> parameter is interpreted in the same way 
+     * as in {@link ServletRequest#getRequestDispatcher(String)}, within
+     * the scope of the {@link ServletContext} from which this
+     * AsyncContext was initialized.
+     *
+     * <p>All path related query methods of the request must reflect the
+     * dispatch target, while the original request URI, context path,
+     * path info, servlet path, and query string may be recovered from
+     * the {@link #ASYNC_REQUEST_URI}, {@link #ASYNC_CONTEXT_PATH},
+     * {@link #ASYNC_PATH_INFO}, {@link #ASYNC_SERVLET_PATH}, and
+     * {@link #ASYNC_QUERY_STRING} attributes of the request. These
+     * attributes will always reflect the original path elements, even under
+     * repeated dispatches.
+     *
+     * <p>There can be at most one asynchronous dispatch operation per
+     * asynchronous cycle, which is started by a call to one of the
+     * {@link ServletRequest#startAsync} methods. Any attempt to perform an
+     * additional asynchronous dispatch operation within the same
+     * asynchronous cycle will result in an IllegalStateException.
+     * If startAsync is subsequently called on the dispatched request,
+     * then any of the dispatch or {@link #complete} methods may be called.
+     *
+     * <p>See {@link #dispatch()} for additional details, including error
+     * handling.
+     *
+     * @param path the path of the dispatch target, scoped to the
+     * ServletContext from which this AsyncContext was initialized
+     *
+     * @throws IllegalStateException if one of the dispatch methods
+     * has been called and the startAsync method has not been
+     * called during the resulting dispatch, or if {@link #complete}
+     * was called
+     *
+     * @see ServletRequest#getDispatcherType
+     */
+    public void dispatch(String path);
+
+
+    /**
+     * Dispatches the request and response objects of this AsyncContext
+     * to the given <tt>path</tt> scoped to the given <tt>context</tt>.
+     *
+     * <p>The <tt>path</tt> parameter is interpreted in the same way 
+     * as in {@link ServletRequest#getRequestDispatcher(String)}, except that
+     * it is scoped to the given <tt>context</tt>.
+     *
+     * <p>All path related query methods of the request must reflect the
+     * dispatch target, while the original request URI, context path,
+     * path info, servlet path, and query string may be recovered from
+     * the {@link #ASYNC_REQUEST_URI}, {@link #ASYNC_CONTEXT_PATH},
+     * {@link #ASYNC_PATH_INFO}, {@link #ASYNC_SERVLET_PATH}, and
+     * {@link #ASYNC_QUERY_STRING} attributes of the request. These
+     * attributes will always reflect the original path elements, even under
+     * repeated dispatches.
+     *
+     * <p>There can be at most one asynchronous dispatch operation per
+     * asynchronous cycle, which is started by a call to one of the
+     * {@link ServletRequest#startAsync} methods. Any attempt to perform an
+     * additional asynchronous dispatch operation within the same
+     * asynchronous cycle will result in an IllegalStateException.
+     * If startAsync is subsequently called on the dispatched request,
+     * then any of the dispatch or {@link #complete} methods may be called.
+     *
+     * <p>See {@link #dispatch()} for additional details, including error
+     * handling.
+     *
+     * @param context the ServletContext of the dispatch target
+     * @param path the path of the dispatch target, scoped to the given
+     * ServletContext
+     *
+     * @throws IllegalStateException if one of the dispatch methods
+     * has been called and the startAsync method has not been
+     * called during the resulting dispatch, or if {@link #complete}
+     * was called
+     *
+     * @see ServletRequest#getDispatcherType
+     */
+    public void dispatch(ServletContext context, String path);
+
+
+    /**
+     * Completes the asynchronous operation that was started on the request
+     * that was used to initialze this AsyncContext, closing the response
+     * that was used to initialize this AsyncContext.
+     *
+     * <p>Any listeners of type {@link AsyncListener} that were registered
+     * with the ServletRequest for which this AsyncContext was created will
+     * be invoked at their {@link AsyncListener#onComplete(AsyncEvent)
+     * onComplete} method.
+     *
+     * <p>It is legal to call this method any time after a call to
+     * {@link ServletRequest#startAsync()} or
+     * {@link ServletRequest#startAsync(ServletRequest, ServletResponse)},
+     * and before a call to one of the <tt>dispatch</tt> methods
+     * of this class. 
+     * If this method is called before the container-initiated dispatch
+     * that called <tt>startAsync</tt> has returned to the container, then
+     * the call will not take effect (and any invocations of
+     * {@link AsyncListener#onComplete(AsyncEvent)} will be delayed) until
+     * after the container-initiated dispatch has returned to the container.
+     */
+    public void complete();
+
+
+    /**
+     * Causes the container to dispatch a thread, possibly from a managed
+     * thread pool, to run the specified <tt>Runnable</tt>. The container may
+     * propagate appropriate contextual information to the <tt>Runnable</tt>. 
+     *
+     * @param run the asynchronous handler
+     */
+    public void start(Runnable run);
+
+
+    /**
+     * Registers the given {@link AsyncListener} with the most recent
+     * asynchronous cycle that was started by a call to one of the
+     * {@link ServletRequest#startAsync} methods.
+     *
+     * <p>The given AsyncListener will receive an {@link AsyncEvent} when
+     * the asynchronous cycle completes successfully, times out, or results
+     * in an error.
+     *
+     * <p>AsyncListener instances will be notified in the order in which
+     * they were added.
+     *
+     * @param listener the AsyncListener to be registered
+     * 
+     * @throws IllegalStateException if this method is called after
+     * the container-initiated dispatch, during which one of the
+     * {@link ServletRequest#startAsync} methods was called, has
+     * returned to the container
+     */
+    public void addListener(AsyncListener listener);
+
+
+    /**
+     * Registers the given {@link AsyncListener} with the most recent
+     * asynchronous cycle that was started by a call to one of the
+     * {@link ServletRequest#startAsync} methods.
+     *
+     * <p>The given AsyncListener will receive an {@link AsyncEvent} when
+     * the asynchronous cycle completes successfully, times out, or results
+     * in an error.
+     *
+     * <p>AsyncListener instances will be notified in the order in which
+     * they were added.
+     *
+     * <p>The given ServletRequest and ServletResponse objects will
+     * be made available to the given AsyncListener via the
+     * {@link AsyncEvent#getSuppliedRequest getSuppliedRequest} and
+     * {@link AsyncEvent#getSuppliedResponse getSuppliedResponse} methods,
+     * respectively, of the {@link AsyncEvent} delivered to it. These objects
+     * should not be read from or written to, respectively, at the time the
+     * AsyncEvent is delivered, because additional wrapping may have
+     * occurred since the given AsyncListener was registered, but may be used
+     * in order to release any resources associated with them.
+     *
+     * @param listener the AsyncListener to be registered
+     * @param servletRequest the ServletRequest that will be included
+     * in the AsyncEvent
+     * @param servletResponse the ServletResponse that will be included
+     * in the AsyncEvent
+     *
+     * @throws IllegalStateException if this method is called after
+     * the container-initiated dispatch, during which one of the
+     * {@link ServletRequest#startAsync} methods was called, has
+     * returned to the container
+     */
+    public void addListener(AsyncListener listener,
+                            ServletRequest servletRequest,
+                            ServletResponse servletResponse);
+
+
+    /**
+     * Instantiates the given {@link AsyncListener} class.
+     *
+     * <p>The returned AsyncListener instance may be further customized
+     * before it is registered with this AsyncContext via a call to one of 
+     * the <code>addListener</code> methods.
+     *
+     * <p>The given AsyncListener class must define a zero argument
+     * constructor, which is used to instantiate it.
+     *
+     * <p>This method supports resource injection if the given
+     * <tt>clazz</tt> represents a Managed Bean.
+     * See the Java EE platform and JSR 299 specifications for additional
+     * details about Managed Beans and resource injection.
+
+     * <p>This method supports any annotations applicable to AsyncListener.
+     *
+     * @param clazz the AsyncListener class to instantiate
+     *
+     * @return the new AsyncListener instance
+     *
+     * @throws ServletException if the given <tt>clazz</tt> fails to be
+     * instantiated
+     */
+    public <T extends AsyncListener> T createListener(Class<T> clazz)
+        throws ServletException; 
+
+
+    /**
+     * Sets the timeout (in milliseconds) for this AsyncContext.
+     *
+     * <p>The timeout applies to this AsyncContext once the
+     * container-initiated dispatch during which one of the
+     * {@link ServletRequest#startAsync} methods was called has
+     * returned to the container. 
+     *
+     * <p>The timeout will expire if neither the {@link #complete} method
+     * nor any of the dispatch methods are called. A timeout value of
+     * zero or less indicates no timeout. 
+     * 
+     * <p>If {@link #setTimeout} is not called, then the container's
+     * default timeout, which is available via a call to
+     * {@link #getTimeout}, will apply.
+     *
+     * @param timeout the timeout in milliseconds
+     *
+     * @throws IllegalStateException if this method is called after
+     * the container-initiated dispatch, during which one of the
+     * {@link ServletRequest#startAsync} methods was called, has
+     * returned to the container
+     */
+    public void setTimeout(long timeout);
+
+
+    /**
+     * Gets the timeout (in milliseconds) for this AsyncContext.
+     *
+     * <p>This method returns the container's default timeout for
+     * asynchronous operations, or the timeout value passed to the most
+     * recent invocation of {@link #setTimeout}.
+     *
+     * <p>A timeout value of zero or less indicates no timeout.
+     *
+     * @return the timeout in milliseconds
+     */
+    public long getTimeout();
+
+}
+```
+
+ 	比较简单，通过看代码中的注释就能知其大意了，异步就是不等待结果立即返回，这里start一般用新线程的方式，线程运行完后(#complete)，需要通知（#addListener）,以及超时检测处理（#setTimeout,由容器Tomcat来设置）
+
+###### 5.1.3 AsyncListener监听器
+
+```java
+package javax.servlet;
+
+import java.io.IOException;
+import java.util.EventListener;
+
+/**
+ * Listener that will be notified in the event that an asynchronous
+ * operation initiated on a ServletRequest to which the listener had been 
+ * added has completed, timed out, or resulted in an error.
+ *
+ * @since Servlet 3.0
+ */
+public interface AsyncListener extends EventListener {
+    
+    /**
+     * Notifies this AsyncListener that an asynchronous operation
+     * has been completed.
+     * 
+     * <p>The {@link AsyncContext} corresponding to the asynchronous
+     * operation that has been completed may be obtained by calling
+     * {@link AsyncEvent#getAsyncContext getAsyncContext} on the given
+     * <tt>event</tt>.
+     *
+     * <p>In addition, if this AsyncListener had been registered via a call
+     * to {@link AsyncContext#addListener(AsyncListener,
+     * ServletRequest, ServletResponse)}, the supplied ServletRequest and
+     * ServletResponse objects may be retrieved by calling
+     * {@link AsyncEvent#getSuppliedRequest getSuppliedRequest} and
+     * {@link AsyncEvent#getSuppliedResponse getSuppliedResponse},
+     * respectively, on the given <tt>event</tt>.
+     *
+     * @param event the AsyncEvent indicating that an asynchronous
+     * operation has been completed
+     *
+     * @throws IOException if an I/O related error has occurred during the
+     * processing of the given AsyncEvent
+     */
+    public void onComplete(AsyncEvent event) throws IOException;
+
+
+    /**
+     * Notifies this AsyncListener that an asynchronous operation
+     * has timed out.
+     * 
+     * <p>The {@link AsyncContext} corresponding to the asynchronous
+     * operation that has timed out may be obtained by calling
+     * {@link AsyncEvent#getAsyncContext getAsyncContext} on the given
+     * <tt>event</tt>.
+     *
+     * <p>In addition, if this AsyncListener had been registered via a call
+     * to {@link AsyncContext#addListener(AsyncListener,
+     * ServletRequest, ServletResponse)}, the supplied ServletRequest and
+     * ServletResponse objects may be retrieved by calling
+     * {@link AsyncEvent#getSuppliedRequest getSuppliedRequest} and
+     * {@link AsyncEvent#getSuppliedResponse getSuppliedResponse},
+     * respectively, on the given <tt>event</tt>.
+     *
+     * @param event the AsyncEvent indicating that an asynchronous
+     * operation has timed out
+     *
+     * @throws IOException if an I/O related error has occurred during the
+     * processing of the given AsyncEvent
+     */
+    public void onTimeout(AsyncEvent event) throws IOException;
+
+
+    /**
+     * Notifies this AsyncListener that an asynchronous operation 
+     * has failed to complete.
+     * 
+     * <p>The {@link AsyncContext} corresponding to the asynchronous
+     * operation that failed to complete may be obtained by calling
+     * {@link AsyncEvent#getAsyncContext getAsyncContext} on the given
+     * <tt>event</tt>.
+     * 
+     * <p>In addition, if this AsyncListener had been registered via a call
+     * to {@link AsyncContext#addListener(AsyncListener,
+     * ServletRequest, ServletResponse)}, the supplied ServletRequest and
+     * ServletResponse objects may be retrieved by calling
+     * {@link AsyncEvent#getSuppliedRequest getSuppliedRequest} and
+     * {@link AsyncEvent#getSuppliedResponse getSuppliedResponse},
+     * respectively, on the given <tt>event</tt>.
+     *
+     * @param event the AsyncEvent indicating that an asynchronous
+     * operation has failed to complete
+     *
+     * @throws IOException if an I/O related error has occurred during the
+     * processing of the given AsyncEvent
+     */
+    public void onError(AsyncEvent event) throws IOException;
+
+
+    /**
+     * Notifies this AsyncListener that a new asynchronous cycle is being
+     * initiated via a call to one of the {@link ServletRequest#startAsync}
+     * methods.
+     *
+     * <p>The {@link AsyncContext} corresponding to the asynchronous
+     * operation that is being reinitialized may be obtained by calling
+     * {@link AsyncEvent#getAsyncContext getAsyncContext} on the given
+     * <tt>event</tt>.
+     * 
+     * <p>In addition, if this AsyncListener had been registered via a call
+     * to {@link AsyncContext#addListener(AsyncListener,
+     * ServletRequest, ServletResponse)}, the supplied ServletRequest and
+     * ServletResponse objects may be retrieved by calling
+     * {@link AsyncEvent#getSuppliedRequest getSuppliedRequest} and
+     * {@link AsyncEvent#getSuppliedResponse getSuppliedResponse},
+     * respectively, on the given <tt>event</tt>.
+     *
+     * <p>This AsyncListener will not receive any events related to the
+     * new asynchronous cycle unless it registers itself (via a call
+     * to {@link AsyncContext#addListener}) with the AsyncContext that
+     * is delivered as part of the given AsyncEvent.
+     *
+     * @param event the AsyncEvent indicating that a new asynchronous
+     * cycle is being initiated
+     *
+     * @throws IOException if an I/O related error has occurred during the
+     * processing of the given AsyncEvent
+     */
+    public void onStartAsync(AsyncEvent event) throws IOException;     
+
+}
+```
+
+​	监听器主要有4个事件，开始、完成、超时、错误。
+
+##### 5.2 SpringMVC中的相关组件
+
+​	SpringMVC中异步请求相关组件 AsyncWebRequest、WebAsyncManager、WebAsyncUtils	
+
+###### 5.2.1 AsyncWebRequest
+
+![image-20181220195645682](https://ws4.sinaimg.cn/large/006tNbRwly1fydgk0syd0j30u019f7aj.jpg)
+
+其实现有两个，其中`NoSupportAsyncWebRequest`不支持异步，所以我们只需要关注`StandarServletAsyncWebRequest`即可。（可以看到其实主要是对Servelt中支持异步的类的一些特性进行整合）
+
+![image-20181220200306736](https://ws2.sinaimg.cn/large/006tNbRwly1fydgqk142nj31bm0pawie.jpg)
+
+> 具体细节看StandarServletAsyncWebRequest的实现
+
+###### 5.2.2 WebAsyncManager
+
+```java
+package org.springframework.web.context.request.async;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.Callable;
+
+import javax.servlet.http.HttpServletRequest;
+
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import org.springframework.core.task.AsyncTaskExecutor;
+import org.springframework.core.task.SimpleAsyncTaskExecutor;
+import org.springframework.util.Assert;
+import org.springframework.web.context.request.RequestAttributes;
+import org.springframework.web.context.request.async.DeferredResult.DeferredResultHandler;
+import org.springframework.web.util.UrlPathHelper;
+
+/**
+ * The central class for managing asynchronous request processing, mainly intended
+ * as an SPI and not typically used directly by application classes.
+ *
+ * <p>An async scenario starts with request processing as usual in a thread (T1).
+ * Concurrent request handling can be initiated by calling
+ * {@link #startCallableProcessing(Callable, Object...) startCallableProcessing} or
+ * {@link #startDeferredResultProcessing(DeferredResult, Object...) startDeferredResultProcessing},
+ * both of which produce a result in a separate thread (T2). The result is saved
+ * and the request dispatched to the container, to resume processing with the saved
+ * result in a third thread (T3). Within the dispatched thread (T3), the saved
+ * result can be accessed via {@link #getConcurrentResult()} or its presence
+ * detected via {@link #hasConcurrentResult()}.
+ *
+ * @author Rossen Stoyanchev
+ * @since 3.2
+ *
+ * @see org.springframework.web.context.request.AsyncWebRequestInterceptor
+ * @see org.springframework.web.servlet.AsyncHandlerInterceptor
+ * @see org.springframework.web.filter.OncePerRequestFilter#shouldNotFilterAsyncDispatch
+ * @see org.springframework.web.filter.OncePerRequestFilter#isAsyncDispatch
+ */
+public final class WebAsyncManager {
+
+   private static final Object RESULT_NONE = new Object();
+
+   private static final Log logger = LogFactory.getLog(WebAsyncManager.class);
+
+   private static final UrlPathHelper urlPathHelper = new UrlPathHelper();
+
+   private static final CallableProcessingInterceptor timeoutCallableInterceptor =
+         new TimeoutCallableProcessingInterceptor();
+
+   private static final DeferredResultProcessingInterceptor timeoutDeferredResultInterceptor =
+         new TimeoutDeferredResultProcessingInterceptor();
+
+
+   private AsyncWebRequest asyncWebRequest;
+
+   private AsyncTaskExecutor taskExecutor = new SimpleAsyncTaskExecutor(this.getClass().getSimpleName());
+
+   private Object concurrentResult = RESULT_NONE;
+
+   private Object[] concurrentResultContext;
+
+   private final Map<Object, CallableProcessingInterceptor> callableInterceptors =
+         new LinkedHashMap<Object, CallableProcessingInterceptor>();
+
+   private final Map<Object, DeferredResultProcessingInterceptor> deferredResultInterceptors =
+         new LinkedHashMap<Object, DeferredResultProcessingInterceptor>();
+
+
+   /**
+    * Package private constructor.
+    * @see WebAsyncUtils#getAsyncManager(javax.servlet.ServletRequest)
+    * @see WebAsyncUtils#getAsyncManager(org.springframework.web.context.request.WebRequest)
+    */
+   WebAsyncManager() {
+   }
+
+   /**
+    * Configure the {@link AsyncWebRequest} to use. This property may be set
+    * more than once during a single request to accurately reflect the current
+    * state of the request (e.g. following a forward, request/response
+    * wrapping, etc). However, it should not be set while concurrent handling
+    * is in progress, i.e. while {@link #isConcurrentHandlingStarted()} is
+    * {@code true}.
+    *
+    * @param asyncWebRequest the web request to use
+    */
+   public void setAsyncWebRequest(final AsyncWebRequest asyncWebRequest) {
+      Assert.notNull(asyncWebRequest, "AsyncWebRequest must not be null");
+      Assert.state(!isConcurrentHandlingStarted(), "Can't set AsyncWebRequest with concurrent handling in progress");
+      this.asyncWebRequest = asyncWebRequest;
+      this.asyncWebRequest.addCompletionHandler(new Runnable() {
+         @Override
+         public void run() {
+            asyncWebRequest.removeAttribute(WebAsyncUtils.WEB_ASYNC_MANAGER_ATTRIBUTE, RequestAttributes.SCOPE_REQUEST);
+         }
+      });
+   }
+
+   /**
+    * Configure an AsyncTaskExecutor for use with concurrent processing via
+    * {@link #startCallableProcessing(Callable, Object...)}.
+    * <p>By default a {@link SimpleAsyncTaskExecutor} instance is used.
+    */
+   public void setTaskExecutor(AsyncTaskExecutor taskExecutor) {
+      this.taskExecutor = taskExecutor;
+   }
+
+   /**
+    * Whether the selected handler for the current request chose to handle the
+    * request asynchronously. A return value of "true" indicates concurrent
+    * handling is under way and the response will remain open. A return value
+    * of "false" means concurrent handling was either not started or possibly
+    * that it has completed and the request was dispatched for further
+    * processing of the concurrent result.
+    */
+   public boolean isConcurrentHandlingStarted() {
+      return ((this.asyncWebRequest != null) && this.asyncWebRequest.isAsyncStarted());
+   }
+
+   /**
+    * Whether a result value exists as a result of concurrent handling.
+    */
+   public boolean hasConcurrentResult() {
+      return (this.concurrentResult != RESULT_NONE);
+   }
+
+   /**
+    * Provides access to the result from concurrent handling.
+    *
+    * @return an Object, possibly an {@code Exception} or {@code Throwable} if
+    * concurrent handling raised one.
+    * @see #clearConcurrentResult()
+    */
+   public Object getConcurrentResult() {
+      return this.concurrentResult;
+   }
+
+   /**
+    * Provides access to additional processing context saved at the start of
+    * concurrent handling.
+    *
+    * @see #clearConcurrentResult()
+    */
+   public Object[] getConcurrentResultContext() {
+      return this.concurrentResultContext;
+   }
+
+   /**
+    * Get the {@link CallableProcessingInterceptor} registered under the given key.
+    * @param key the key
+    * @return the interceptor registered under that key or {@code null}
+    */
+   public CallableProcessingInterceptor getCallableInterceptor(Object key) {
+      return this.callableInterceptors.get(key);
+   }
+
+   /**
+    * Get the {@link DeferredResultProcessingInterceptor} registered under the given key.
+    * @param key the key
+    * @return the interceptor registered under that key or {@code null}
+    */
+   public DeferredResultProcessingInterceptor getDeferredResultInterceptor(Object key) {
+      return this.deferredResultInterceptors.get(key);
+   }
+
+   /**
+    * Register a {@link CallableProcessingInterceptor} under the given key.
+    * @param key the key
+    * @param interceptor the interceptor to register
+    */
+   public void registerCallableInterceptor(Object key, CallableProcessingInterceptor interceptor) {
+      Assert.notNull(key, "Key is required");
+      Assert.notNull(interceptor, "CallableProcessingInterceptor  is required");
+      this.callableInterceptors.put(key, interceptor);
+   }
+
+   /**
+    * Register a {@link CallableProcessingInterceptor} without a key.
+    * The key is derived from the class name and hashcode.
+    * @param interceptors one or more interceptors to register
+    */
+   public void registerCallableInterceptors(CallableProcessingInterceptor... interceptors) {
+      Assert.notNull(interceptors, "A CallableProcessingInterceptor is required");
+      for (CallableProcessingInterceptor interceptor : interceptors) {
+         String key = interceptor.getClass().getName() + ":" + interceptor.hashCode();
+         this.callableInterceptors.put(key, interceptor);
+      }
+   }
+
+   /**
+    * Register a {@link DeferredResultProcessingInterceptor} under the given key.
+    * @param key the key
+    * @param interceptor the interceptor to register
+    */
+   public void registerDeferredResultInterceptor(Object key, DeferredResultProcessingInterceptor interceptor) {
+      Assert.notNull(key, "Key is required");
+      Assert.notNull(interceptor, "DeferredResultProcessingInterceptor is required");
+      this.deferredResultInterceptors.put(key, interceptor);
+   }
+
+   /**
+    * Register a {@link DeferredResultProcessingInterceptor} without a key.
+    * The key is derived from the class name and hashcode.
+    * @param interceptors one or more interceptors to register
+    */
+   public void registerDeferredResultInterceptors(DeferredResultProcessingInterceptor... interceptors) {
+      Assert.notNull(interceptors, "A DeferredResultProcessingInterceptor is required");
+      for (DeferredResultProcessingInterceptor interceptor : interceptors) {
+         String key = interceptors.getClass().getName() + ":" + interceptors.hashCode();
+         this.deferredResultInterceptors.put(key, interceptor);
+      }
+   }
+
+   /**
+    * Clear {@linkplain #getConcurrentResult() concurrentResult} and
+    * {@linkplain #getConcurrentResultContext() concurrentResultContext}.
+    */
+   public void clearConcurrentResult() {
+      this.concurrentResult = RESULT_NONE;
+      this.concurrentResultContext = null;
+   }
+
+   /**
+    * Start concurrent request processing and execute the given task with an
+    * {@link #setTaskExecutor(AsyncTaskExecutor) AsyncTaskExecutor}. The result
+    * from the task execution is saved and the request dispatched in order to
+    * resume processing of that result. If the task raises an Exception then
+    * the saved result will be the raised Exception.
+    *
+    * @param callable a unit of work to be executed asynchronously
+    * @param processingContext additional context to save that can be accessed
+    * via {@link #getConcurrentResultContext()}
+    * @throws Exception If concurrent processing failed to start
+    *
+    * @see #getConcurrentResult()
+    * @see #getConcurrentResultContext()
+    */
+   @SuppressWarnings({"unchecked", "rawtypes" })
+   public void startCallableProcessing(final Callable<?> callable, Object... processingContext) throws Exception {
+      Assert.notNull(callable, "Callable must not be null");
+      startCallableProcessing(new WebAsyncTask(callable), processingContext);
+   }
+
+   /**
+    * Use the given {@link WebAsyncTask} to configure the task executor as well as
+    * the timeout value of the {@code AsyncWebRequest} before delegating to
+    * {@link #startCallableProcessing(Callable, Object...)}.
+    *
+    * @param webAsyncTask a WebAsyncTask containing the target {@code Callable}
+    * @param processingContext additional context to save that can be accessed
+    * via {@link #getConcurrentResultContext()}
+    * @throws Exception If concurrent processing failed to start
+    */
+   public void startCallableProcessing(final WebAsyncTask<?> webAsyncTask, Object... processingContext) throws Exception {
+      Assert.notNull(webAsyncTask, "WebAsyncTask must not be null");
+      Assert.state(this.asyncWebRequest != null, "AsyncWebRequest must not be null");
+
+      Long timeout = webAsyncTask.getTimeout();
+      if (timeout != null) {
+         this.asyncWebRequest.setTimeout(timeout);
+      }
+
+      AsyncTaskExecutor executor = webAsyncTask.getExecutor();
+      if (executor != null) {
+         this.taskExecutor = executor;
+      }
+
+      List<CallableProcessingInterceptor> interceptors = new ArrayList<CallableProcessingInterceptor>();
+      interceptors.add(webAsyncTask.getInterceptor());
+      interceptors.addAll(this.callableInterceptors.values());
+      interceptors.add(timeoutCallableInterceptor);
+
+      final Callable<?> callable = webAsyncTask.getCallable();
+      final CallableInterceptorChain interceptorChain = new CallableInterceptorChain(interceptors);
+
+      this.asyncWebRequest.addTimeoutHandler(new Runnable() {
+         @Override
+         public void run() {
+            logger.debug("Processing timeout");
+            Object result = interceptorChain.triggerAfterTimeout(asyncWebRequest, callable);
+            if (result != CallableProcessingInterceptor.RESULT_NONE) {
+               setConcurrentResultAndDispatch(result);
+            }
+         }
+      });
+
+      this.asyncWebRequest.addCompletionHandler(new Runnable() {
+         @Override
+         public void run() {
+            interceptorChain.triggerAfterCompletion(asyncWebRequest, callable);
+         }
+      });
+
+      interceptorChain.applyBeforeConcurrentHandling(asyncWebRequest, callable);
+
+      startAsyncProcessing(processingContext);
+
+      this.taskExecutor.submit(new Runnable() {
+         @Override
+         public void run() {
+            Object result = null;
+            try {
+               interceptorChain.applyPreProcess(asyncWebRequest, callable);
+               result = callable.call();
+            }
+            catch (Throwable t) {
+               result = t;
+            }
+            finally {
+               result = interceptorChain.applyPostProcess(asyncWebRequest, callable, result);
+            }
+            setConcurrentResultAndDispatch(result);
+         }
+      });
+   }
+
+   private void setConcurrentResultAndDispatch(Object result) {
+      synchronized (WebAsyncManager.this) {
+         if (hasConcurrentResult()) {
+            return;
+         }
+         concurrentResult = result;
+      }
+
+      if (asyncWebRequest.isAsyncComplete()) {
+         logger.error("Could not complete async processing due to timeout or network error");
+         return;
+      }
+
+      logger.debug("Concurrent result value [" + concurrentResult + "]");
+      logger.debug("Dispatching request to resume processing");
+
+      asyncWebRequest.dispatch();
+   }
+
+   /**
+    * Start concurrent request processing and initialize the given
+    * {@link DeferredResult} with a {@link DeferredResultHandler} that saves
+    * the result and dispatches the request to resume processing of that
+    * result. The {@code AsyncWebRequest} is also updated with a completion
+    * handler that expires the {@code DeferredResult} and a timeout handler
+    * assuming the {@code DeferredResult} has a default timeout result.
+    *
+    * @param deferredResult the DeferredResult instance to initialize
+    * @param processingContext additional context to save that can be accessed
+    * via {@link #getConcurrentResultContext()}
+    * @throws Exception If concurrent processing failed to start
+    *
+    * @see #getConcurrentResult()
+    * @see #getConcurrentResultContext()
+    */
+   public void startDeferredResultProcessing(
+         final DeferredResult<?> deferredResult, Object... processingContext) throws Exception {
+
+      Assert.notNull(deferredResult, "DeferredResult must not be null");
+      Assert.state(this.asyncWebRequest != null, "AsyncWebRequest must not be null");
+
+      Long timeout = deferredResult.getTimeoutValue();
+      if (timeout != null) {
+         this.asyncWebRequest.setTimeout(timeout);
+      }
+
+      List<DeferredResultProcessingInterceptor> interceptors = new ArrayList<DeferredResultProcessingInterceptor>();
+      interceptors.add(deferredResult.getInterceptor());
+      interceptors.addAll(this.deferredResultInterceptors.values());
+      interceptors.add(timeoutDeferredResultInterceptor);
+
+      final DeferredResultInterceptorChain interceptorChain = new DeferredResultInterceptorChain(interceptors);
+
+      this.asyncWebRequest.addTimeoutHandler(new Runnable() {
+         @Override
+         public void run() {
+            try {
+               interceptorChain.triggerAfterTimeout(asyncWebRequest, deferredResult);
+            }
+            catch (Throwable t) {
+               setConcurrentResultAndDispatch(t);
+            }
+         }
+      });
+
+      this.asyncWebRequest.addCompletionHandler(new Runnable() {
+         @Override
+         public void run() {
+            interceptorChain.triggerAfterCompletion(asyncWebRequest, deferredResult);
+         }
+      });
+
+      interceptorChain.applyBeforeConcurrentHandling(asyncWebRequest, deferredResult);
+
+      startAsyncProcessing(processingContext);
+
+      try {
+         interceptorChain.applyPreProcess(this.asyncWebRequest, deferredResult);
+         deferredResult.setResultHandler(new DeferredResultHandler() {
+            @Override
+            public void handleResult(Object result) {
+               result = interceptorChain.applyPostProcess(asyncWebRequest, deferredResult, result);
+               setConcurrentResultAndDispatch(result);
+            }
+         });
+      }
+      catch (Throwable t) {
+         setConcurrentResultAndDispatch(t);
+      }
+   }
+
+   private void startAsyncProcessing(Object[] processingContext) {
+
+      clearConcurrentResult();
+      this.concurrentResultContext = processingContext;
+
+      this.asyncWebRequest.startAsync();
+
+      if (logger.isDebugEnabled()) {
+         HttpServletRequest request = this.asyncWebRequest.getNativeRequest(HttpServletRequest.class);
+         String requestUri = urlPathHelper.getRequestUri(request);
+         logger.debug("Concurrent handling starting for " + request.getMethod() + " [" + requestUri + "]");
+      }
+   }
+
+}
+```
+
+​	类中有两个重要的方法#startCallableProcessing（用于处理Callable和WebAsyncTask类型），#startDeferredResultProcessing（用于处理DeferredResult和ListenableFuture类型）,是启动异步处理的入口方法，它们一共做了三件事
+
+- 启动异步处理
+- 给Request设置相应属性（timeout、timeoutHandler和completionHandler）
+- 在相应的位置调用相应的拦截器（CallableProcessingInterceptor和DeferredResultProcessingInterceptor都封装在相应的Chain中）
+
+> 更多细节 可查看startCallableProcessing的执行过程
+
+###### 5.2.3 WebAsyncUtils
+
+```java
+package org.springframework.web.context.request.async;
+
+import java.lang.reflect.Constructor;
+
+import javax.servlet.ServletRequest;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+
+import org.springframework.beans.BeanUtils;
+import org.springframework.util.ClassUtils;
+import org.springframework.web.context.request.RequestAttributes;
+import org.springframework.web.context.request.WebRequest;
+
+/**
+ * Utility methods related to processing asynchronous web requests.
+ *
+ * @author Rossen Stoyanchev
+ * @since 3.2
+ */
+public abstract class WebAsyncUtils {
+
+   public static final String WEB_ASYNC_MANAGER_ATTRIBUTE = WebAsyncManager.class.getName() + ".WEB_ASYNC_MANAGER";
+
+   private static Constructor<?> standardAsyncRequestConstructor;
+
+
+   /**
+    * Obtain the {@link WebAsyncManager} for the current request, or if not
+    * found, create and associate it with the request.
+    */
+   public static WebAsyncManager getAsyncManager(ServletRequest servletRequest) {
+      WebAsyncManager asyncManager = (WebAsyncManager) servletRequest.getAttribute(WEB_ASYNC_MANAGER_ATTRIBUTE);
+      if (asyncManager == null) {
+         asyncManager = new WebAsyncManager();
+         servletRequest.setAttribute(WEB_ASYNC_MANAGER_ATTRIBUTE, asyncManager);
+      }
+      return asyncManager;
+   }
+
+   /**
+    * Obtain the {@link WebAsyncManager} for the current request, or if not
+    * found, create and associate it with the request.
+    */
+   public static WebAsyncManager getAsyncManager(WebRequest webRequest) {
+      int scope = RequestAttributes.SCOPE_REQUEST;
+      WebAsyncManager asyncManager = (WebAsyncManager) webRequest.getAttribute(WEB_ASYNC_MANAGER_ATTRIBUTE, scope);
+      if (asyncManager == null) {
+         asyncManager = new WebAsyncManager();
+         webRequest.setAttribute(WEB_ASYNC_MANAGER_ATTRIBUTE, asyncManager, scope);
+      }
+      return asyncManager;
+   }
+
+   /**
+    * Create an AsyncWebRequest instance. By default an instance of
+    * {@link StandardServletAsyncWebRequest} is created if running in Servlet
+    * 3.0 (or higher) environment or as a fallback, an instance of
+    * {@link NoSupportAsyncWebRequest} is returned.
+    *
+    * @param request the current request
+    * @param response the current response
+    * @return an AsyncWebRequest instance, never {@code null}
+    */
+   public static AsyncWebRequest createAsyncWebRequest(HttpServletRequest request, HttpServletResponse response) {
+      return ClassUtils.hasMethod(ServletRequest.class, "startAsync") ?
+            createStandardServletAsyncWebRequest(request, response) : new NoSupportAsyncWebRequest(request, response);
+   }
+
+   private static AsyncWebRequest createStandardServletAsyncWebRequest(HttpServletRequest request, HttpServletResponse response) {
+      try {
+         if (standardAsyncRequestConstructor == null) {
+            String className = "org.springframework.web.context.request.async.StandardServletAsyncWebRequest";
+            Class<?> clazz = ClassUtils.forName(className, WebAsyncUtils.class.getClassLoader());
+            standardAsyncRequestConstructor = clazz.getConstructor(HttpServletRequest.class, HttpServletResponse.class);
+         }
+         return (AsyncWebRequest) BeanUtils.instantiateClass(standardAsyncRequestConstructor, request, response);
+      }
+      catch (Throwable t) {
+         throw new IllegalStateException("Failed to instantiate StandardServletAsyncWebRequest", t);
+      }
+   }
+
+}
+```
+
+​	可以看到这个类主要是提供WebAsyncManage、AsyncWebRequest 相关的操作
+
+
+
+##### 5.3 SpringMVC中请求的支持
+
+1. `FrameworkServlet`中添加了`RequestBindingInterceptor`
+
+2. `RequestMappingHandlerAdapter`的`#invokeHandlerMethod` 提供了对异步请求的核心支持
+
+   ​	2.1 创建`AsyncWebRequest`并设置超时时间
+
+   ​	2.2 对当前请求`WebAsyncManager`设置了属性`（taskExecutor、asyncWebRequest、callabltinterceptors和deferredResultInterceptors）`
+
+   ​	2.3 并判断是否有结果，如果有对结果进行处理。`requestMappingMethod = requestMappingMethod.wrapConcurrentResult(result);`
+
+   ​	2.4 然后执行方法 `requestMappingMethod.invokeAndHandle(webRequest, mavContainer);`
+
+3. 返回值处理器，`AsyncTaskMethodReturnValueHandler` `CallableMethodReturnValueHandler` `DeferredResultMethodReturnValueHandler` `ListenableFutureReturnValueHandler`
+
+4. `DispatcherServlet`的`#doDispatcher`，如果是异步直接返回。
+
+```java
+/**
+ * Invoke the {@link RequestMapping} handler method preparing a {@link ModelAndView}
+ * if view resolution is required.
+ */
+private ModelAndView invokeHandleMethod(HttpServletRequest request,
+      HttpServletResponse response, HandlerMethod handlerMethod) throws Exception {
+
+   ServletWebRequest webRequest = new ServletWebRequest(request, response);
+
+   WebDataBinderFactory binderFactory = getDataBinderFactory(handlerMethod);
+   ModelFactory modelFactory = getModelFactory(handlerMethod, binderFactory);
+   ServletInvocableHandlerMethod requestMappingMethod = createRequestMappingMethod(handlerMethod, binderFactory);
+
+   ModelAndViewContainer mavContainer = new ModelAndViewContainer();
+   mavContainer.addAllAttributes(RequestContextUtils.getInputFlashMap(request));
+   modelFactory.initModel(webRequest, mavContainer, requestMappingMethod);
+   mavContainer.setIgnoreDefaultModelOnRedirect(this.ignoreDefaultModelOnRedirect);
+
+   AsyncWebRequest asyncWebRequest = WebAsyncUtils.createAsyncWebRequest(request, response);
+   asyncWebRequest.setTimeout(this.asyncRequestTimeout);
+
+   final WebAsyncManager asyncManager = WebAsyncUtils.getAsyncManager(request);
+   asyncManager.setTaskExecutor(this.taskExecutor);
+   asyncManager.setAsyncWebRequest(asyncWebRequest);
+   asyncManager.registerCallableInterceptors(this.callableInterceptors);
+   asyncManager.registerDeferredResultInterceptors(this.deferredResultInterceptors);
+
+   if (asyncManager.hasConcurrentResult()) {
+      Object result = asyncManager.getConcurrentResult();
+      mavContainer = (ModelAndViewContainer) asyncManager.getConcurrentResultContext()[0];
+      asyncManager.clearConcurrentResult();
+
+      if (logger.isDebugEnabled()) {
+         logger.debug("Found concurrent result value [" + result + "]");
+      }
+      requestMappingMethod = requestMappingMethod.wrapConcurrentResult(result);
+   }
+
+   requestMappingMethod.invokeAndHandle(webRequest, mavContainer);
+
+   if (asyncManager.isConcurrentHandlingStarted()) {
+      return null;
+   }
+
+   return getModelAndView(mavContainer, modelFactory, webRequest);
+}
+```
+
+##### 5.4 SpringWebFlux 
+
+
+
